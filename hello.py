@@ -1,77 +1,124 @@
-from flask import Flask
+from flask import Flask, request
 import os
 import boto3
 from dotenv import load_dotenv
 load_dotenv()
 
-# Enter email you want to use for account
-username = 'example@gmail.com'
-# Enter passwird you want to use for account
-password = '#Abc1234'
-# Confirm code returned by email and used in confirm route
-confirm_code = ''
-# Access token returned from signup/confirm
-access_token=''
-
 client = boto3.client('cognito-idp', region_name=os.getenv('COGNITO_REGION'))
 
 app = Flask(__name__)
 
-@app.route('/')
+@app.route('/', methods=['GET', 'POST'])
 def hello_world():
+    data = None
+    if request.is_json:
+        data = request.get_json()
+
+    print(data['message'])
     return 'Hello World!'
 
 # Login route
 @app.route('/login', methods=['POST'])
 def login():
+    data = None
+    if request.is_json:
+        data = request.get_json()
+
+    # initiate authentication
     response = client.initiate_auth(
       ClientId=os.getenv('COGNITO_CLIENT_ID'),
       AuthFlow='USER_PASSWORD_AUTH',
       AuthParameters={
-        'USERNAME': username,
-        'PASSWORD': password
+        'USERNAME': data['username'],
+        'PASSWORD': data['password']
       }
     )
 
-    print(response['AuthenticationResult']['AccessToken'])
-    print(response['AuthenticationResult']['RefreshToken'])
+    access_token = response['AuthenticationResult']['AccessToken']
+    refresh_token = response['AuthenticationResult']['RefreshToken']
 
-    return response
+    # retrieve user data
+    user_data = client.get_user(AccessToken=access_token)
+
+    # get email from user data
+    email = None
+    for attribute in user_data['UserAttributes']:
+        if attribute['Name'] == 'email':
+            email = attribute['Value']
+            break
+
+    # return user data json
+    return {
+        'access_token': access_token,
+        'email': email
+    }
 
 # Signup route
 @app.route('/signup', methods=['POST'])
 def signup():
+    data = None
+    if request.is_json():
+        data = request.get_json()
+
+
     response = client.sign_up(
       ClientId=os.getenv('COGNITO_CLIENT_ID'),
-      Username=username,
-      Password=password,
+      Username=data['username'],
+      Password=data['password'],
     )
+
     return response
+
+# Signout route
+@app.route('/signout', methods=['POST'])
+def signout():
+  data = None
+  if request.is_json():
+      data = request.get_json()
+
+  response = client.global_sign_out(
+    AccessToken=data['access_token']
+  )
+
+  return response
 
 # Confirm signup route
 @app.route('/confirm', methods=['POST'])
 def confirm():
+    data = None
+    if request.is_json():
+        data = request.get_json()
+
     response = client.confirm_sign_up(
       ClientId=os.getenv('COGNITO_CLIENT_ID'),
-      Username=username,
-      ConfirmationCode=confirm_code,
+      Username=data['username'],
+      ConfirmationCode=data['confirm_code'],
     )
     return response
 
-# Resend confirmation code route
+# Resend signup confirmation code route
 @app.route('/resend', methods=['POST'])
 def resend():
+    data = None
+    if request.is_json():
+        data = request.get_json()
+
     response = client.resend_confirmation_code(
       ClientId=os.getenv('COGNITO_CLIENT_ID'),
-      Username=username
+      Username=data['username']
     )
     return response
 
 #Get user attributes route
 @app.route('/user', methods=['GET'])
 def user():
+    data = None
+    if request.is_json():
+        data = request.get_json()
+    
+
     response = client.get_user(
-      AccessToken=access_token
+      AccessToken=data['access_token']
     )
 
     attr_sub = None
@@ -88,8 +135,12 @@ def user():
 # Forgot password route
 @app.route('/forgot_password', methods=['GET'])
 def forgot_password():
+    data = None
+    if request.is_json():
+        data = request.get_json()
+
     response = client.forgot_password(
       ClientId=os.getenv('COGNITO_CLIENT_ID'),
-      Username=username
+      Username=data['username']
     )
     return response
