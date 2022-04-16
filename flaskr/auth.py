@@ -6,8 +6,15 @@ load_dotenv()
 
 bp = Blueprint('auth', __name__, url_prefix='/auth')
 
+# Identity Pool Resources
+# https://docs.aws.amazon.com/cognito/latest/developerguide/authentication-flow.html
+# https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/cognito-identity.html?highlight=get_credentials_for_identity#CognitoIdentity.Client.get_credentials_for_identity
+# https://www.youtube.com/watch?v=9pvygKIuCpI
+# https://stackoverflow.com/questions/70551382/boto3-how-to-use-amazon-cognito-to-get-temporary-credentials-from-identity-pool
+
 
 client = boto3.client('cognito-idp', region_name=os.getenv('COGNITO_REGION'))
+identityClient = boto3.client('cognito-identity', region_name=os.getenv('COGNITO_REGION'))
 
 @bp.route('/', methods=['GET', 'POST'])
 def hello_world():
@@ -29,9 +36,25 @@ def login():
         'PASSWORD': data['password']
       }
     )
-
     access_token = response['AuthenticationResult']['AccessToken']
     refresh_token = response['AuthenticationResult']['RefreshToken']
+    id_token = response['AuthenticationResult']['IdToken']
+
+    # handle identity pool credentials
+    logins = 'cognito-idp.' + os.getenv('COGNITO_REGION') + '.amazonaws.com/' + os.getenv('COGNITO_USER_POOL_ID')
+    identityId = identityClient.get_id(
+        IdentityPoolId=os.getenv('COGNITO_IDENTITY_POOL_ID'),
+        Logins={
+            logins: id_token
+        }
+    )['IdentityId']
+
+    aws_cred = identityClient.get_credentials_for_identity(
+        IdentityId=identityId,
+        Logins={
+            logins: id_token
+        }
+    )['Credentials']
 
     # retrieve user data
     user_data = client.get_user(AccessToken=access_token)
