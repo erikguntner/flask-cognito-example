@@ -1,20 +1,45 @@
-from flask import (Blueprint, request)
-import os
+from os import environ as env
+from typing import Dict
+
 import boto3
-from dotenv import load_dotenv
-load_dotenv()
+from flask import Blueprint, request, jsonify
+from dotenv import load_dotenv, find_dotenv
 
-bp = Blueprint('auth', __name__, url_prefix='/auth')
-
-# Identity Pool Resources
+# Resources
 # https://docs.aws.amazon.com/cognito/latest/developerguide/authentication-flow.html
 # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/cognito-identity.html?highlight=get_credentials_for_identity#CognitoIdentity.Client.get_credentials_for_identity
 # https://www.youtube.com/watch?v=9pvygKIuCpI
 # https://stackoverflow.com/questions/70551382/boto3-how-to-use-amazon-cognito-to-get-temporary-credentials-from-identity-pool
+# https://redux-toolkit.js.org/rtk-query/usage/customizing-queries#automatic-re-authorization-by-extending-fetchbasequery
 
+#  Define blueprint
+bp = Blueprint('auth', __name__, url_prefix='/auth')
 
-client = boto3.client('cognito-idp', region_name=os.getenv('COGNITO_REGION'))
-identityClient = boto3.client('cognito-identity', region_name=os.getenv('COGNITO_REGION'))
+# Load environment variables from .env file
+ENV_FILE = find_dotenv()
+if ENV_FILE:
+    load_dotenv(ENV_FILE)
+COGNITO_REGION=env.get('COGNITO_REGION')
+COGNITO_CLIENT_ID=env.get('COGNITO_CLIENT_ID')
+COGNITO_USER_POOL_ID=env.get('COGNITO_USER_POOL_ID')
+COGNITO_IDENTITY_POOL_ID=env.get('COGNITO_IDENTITY_POOL_ID')
+
+# Initialize Cognito clients
+userClient = boto3.client('cognito-idp', region_name=COGNITO_REGION)
+identityClient = boto3.client('cognito-identity', region_name=COGNITO_REGION)
+
+# Format error reponse and append status code
+class AuthError(Exception):
+    def __init__(self, error: Dict[str, str], status_code):
+        super().__init__()
+        self.error = error
+        self.status_code = status_code
+
+@bp.errorhandler(AuthError)
+def handle_auth_error(ex):
+    response = jsonify(ex.error)
+    response.status_code = ex.status_code
+    return response 
 
 @bp.route('/', methods=['GET', 'POST'])
 def hello_world():
@@ -28,8 +53,8 @@ def login():
         data = request.get_json()
 
     # initiate authentication
-    response = client.initiate_auth(
-      ClientId=os.getenv('COGNITO_CLIENT_ID'),
+    response = userClient.initiate_auth(
+      ClientId=COGNITO_CLIENT_ID,
       AuthFlow='USER_PASSWORD_AUTH',
       AuthParameters={
         'USERNAME': data['username'],
@@ -40,10 +65,10 @@ def login():
     refresh_token = response['AuthenticationResult']['RefreshToken']
     id_token = response['AuthenticationResult']['IdToken']
 
-    # handle identity pool credentials
-    logins = 'cognito-idp.' + os.getenv('COGNITO_REGION') + '.amazonaws.com/' + os.getenv('COGNITO_USER_POOL_ID')
+    # Retrieve identity pool credentials
+    logins = 'cognito-idp.' + COGNITO_REGION + '.amazonaws.com/' + COGNITO_USER_POOL_ID
     identityId = identityClient.get_id(
-        IdentityPoolId=os.getenv('COGNITO_IDENTITY_POOL_ID'),
+        IdentityPoolId=COGNITO_IDENTITY_POOL_ID,
         Logins={
             logins: id_token
         }
@@ -57,7 +82,7 @@ def login():
     )['Credentials']
 
     # retrieve user data
-    user_data = client.get_user(AccessToken=access_token)
+    user_data = userClient.get_user(AccessToken=access_token)
 
     # get email from user data
     email = None
@@ -76,12 +101,12 @@ def login():
 @bp.route('/signup', methods=['POST'])
 def signup():
     data = None
-    if request.is_json():
+    if request.is_json:
         data = request.get_json()
 
 
-    response = client.sign_up(
-      ClientId=os.getenv('COGNITO_CLIENT_ID'),
+    response = userClient.sign_up(
+      ClientId=COGNITO_CLIENT_ID,
       Username=data['username'],
       Password=data['password'],
     )
@@ -92,10 +117,10 @@ def signup():
 @bp.route('/signout', methods=['POST'])
 def signout():
   data = None
-  if request.is_json():
+  if request.is_json:
       data = request.get_json()
 
-  response = client.global_sign_out(
+  response = userClient.global_sign_out(
     AccessToken=data['access_token']
   )
 
@@ -105,11 +130,11 @@ def signout():
 @bp.route('/confirm', methods=['POST'])
 def confirm():
     data = None
-    if request.is_json():
+    if request.is_json:
         data = request.get_json()
 
-    response = client.confirm_sign_up(
-      ClientId=os.getenv('COGNITO_CLIENT_ID'),
+    response = userClient.confirm_sign_up(
+      ClientId=COGNITO_CLIENT_ID,
       Username=data['username'],
       ConfirmationCode=data['confirm_code'],
     )
@@ -119,26 +144,28 @@ def confirm():
 @bp.route('/resend', methods=['POST'])
 def resend():
     data = None
-    if request.is_json():
+    if request.is_json:
         data = request.get_json()
 
-    response = client.resend_confirmation_code(
-      ClientId=os.getenv('COGNITO_CLIENT_ID'),
+    response = userClient.resend_confirmation_code(
+      ClientId=COGNITO_CLIENT_ID,
       Username=data['username']
     )
     return response
 
 #Get user attributes route
-@bp.route('/user', methods=['GET'])
+@bp.route('/user', methods=['POST'])
 def user():
     data = None
-    if request.is_json():
+    if request.is_json:
         data = request.get_json()
     
 
-    response = client.get_user(
+    response = userClient.get_user(
       AccessToken=data['access_token']
     )
+
+    print('user response: ', response)
 
     attr_sub = None
     for attr in response['UserAttributes']:
@@ -146,20 +173,20 @@ def user():
             attr_sub = attr['Value']
             break
 
-    print(attr_sub)
-
     return response
+
+
 
 
 # Forgot password route
 @bp.route('/forgot_password', methods=['GET'])
 def forgot_password():
     data = None
-    if request.is_json():
+    if request.is_json:
         data = request.get_json()
 
-    response = client.forgot_password(
-      ClientId=os.getenv('COGNITO_CLIENT_ID'),
+    response = userClient.forgot_password(
+      ClientId=COGNITO_CLIENT_ID,
       Username=data['username']
     )
     return response
