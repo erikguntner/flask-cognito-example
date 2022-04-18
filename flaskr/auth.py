@@ -1,9 +1,12 @@
 from os import environ as env
 from typing import Dict
+from functools import wraps
+
 
 import boto3
 from flask import Blueprint, request, jsonify
 from dotenv import load_dotenv, find_dotenv
+from flask_cors import cross_origin, CORS
 
 # Resources
 # https://docs.aws.amazon.com/cognito/latest/developerguide/authentication-flow.html
@@ -14,6 +17,9 @@ from dotenv import load_dotenv, find_dotenv
 
 #  Define blueprint
 bp = Blueprint('auth', __name__, url_prefix='/auth')
+# enable CORS
+CORS(bp)
+
 
 # Load environment variables from .env file
 ENV_FILE = find_dotenv()
@@ -24,9 +30,11 @@ COGNITO_CLIENT_ID=env.get('COGNITO_CLIENT_ID')
 COGNITO_USER_POOL_ID=env.get('COGNITO_USER_POOL_ID')
 COGNITO_IDENTITY_POOL_ID=env.get('COGNITO_IDENTITY_POOL_ID')
 
+
 # Initialize Cognito clients
 userClient = boto3.client('cognito-idp', region_name=COGNITO_REGION)
 identityClient = boto3.client('cognito-identity', region_name=COGNITO_REGION)
+
 
 # Format error reponse and append status code
 class AuthError(Exception):
@@ -35,15 +43,79 @@ class AuthError(Exception):
         self.error = error
         self.status_code = status_code
 
+
+# Error handler
 @bp.errorhandler(AuthError)
 def handle_auth_error(ex):
     response = jsonify(ex.error)
     response.status_code = ex.status_code
     return response 
 
+
+# Get auth token from header
+def get_token_auth_header():
+  auth = request.headers.get('Authorization', None)
+  if not auth:
+    raise AuthError({
+      'code': 'authorization_header_missing',
+      'description': 'Authorization header is expected.'
+    }, 401)
+  
+  parts = auth.split()
+
+  # check if the header is in the correct format
+  if parts[0].lower() != 'bearer':
+    raise AuthError({
+      'code': 'invalid_header',
+      'description': 'Authorization header must start with "Bearer".'
+    }, 401)
+  
+  if len(parts) == 1:
+        raise AuthError({"code": "invalid_header",
+                        "description": "Token not found"}, 401)
+  if len(parts) > 2:
+      raise AuthError({"code": "invalid_header",
+                        "description":
+                            "Authorization header must be"
+                            " Bearer token"}, 401)
+  # return token
+  token = parts[1]
+  return token
+
+# Decorator to check if user is authenticated
+def requires_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = get_token_auth_header()
+        # Check if token is valid
+        
+        try:
+            # Get user info from token
+            userInfo = userClient.get_user(
+                AccessToken=token
+            )
+            # Add user info to request
+            request.userInfo = userInfo
+            return f(*args, **kwargs)
+        except userClient.exceptions.NotAuthorizedException as e:
+            code = e.response['Error']['Code']
+            description = e.response['Error']['Message']
+            raise AuthError({
+                      "code": code, 
+                      "description": description
+                  }, 401)
+                                
+    return decorated
+
 @bp.route('/', methods=['GET', 'POST'])
 def hello_world():
     return 'Hello World!'
+
+@bp.route('/private', methods=['GET'])
+@requires_auth
+def private():
+    print(request.userInfo)
+    return 'Success - private'
 
 # Login route
 @bp.route('/login', methods=['POST'])
@@ -156,10 +228,6 @@ def resend():
 #Get user attributes route
 @bp.route('/user', methods=['POST'])
 def user():
-    data = None
-    if request.is_json:
-        data = request.get_json()
-    
 
     response = userClient.get_user(
       AccessToken=data['access_token']
