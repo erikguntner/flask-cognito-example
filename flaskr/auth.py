@@ -1,4 +1,5 @@
 import base64
+from curses import meta
 import hmac
 from os import environ as env
 from typing import Dict
@@ -29,7 +30,6 @@ if ENV_FILE:
 COGNITO_REGION=env.get('COGNITO_REGION')
 COGNITO_CLIENT_ID=env.get('COGNITO_GOOGLE_CLIENT_ID')
 COGNITO_CLIENT_SECRET=env.get('COGNITO_CLIENT_SECRET')
-COGNITO_GOOGLE_CLIENT_ID=env.get('COGNITO_GOOGLE_CLIENT_ID')
 COGNITO_USER_POOL_ID=env.get('COGNITO_USER_POOL_ID')
 COGNITO_IDENTITY_POOL_ID=env.get('COGNITO_IDENTITY_POOL_ID')
 SECRET_KEY=env.get('SECRET_KEY')
@@ -120,14 +120,7 @@ def requires_auth(f):
             # Add user info to request
             request.userInfo = userInfo
             return f(*args, **kwargs)
-        # Token is invalid error
-        except userClient.exceptions.NotAuthorizedException as e:
-            code = e.response['Error']['Code']
-            description = e.response['Error']['Message']
-            raise AuthError({
-                      "code": code, 
-                      "description": description
-                  }, 401)
+
         # handle other errors
         except Exception as e:
             code = e.response['Error']['Code']
@@ -174,23 +167,6 @@ def signin():
 
     access_token = response['AuthenticationResult']['AccessToken']
     refresh_token = response['AuthenticationResult']['RefreshToken']
-    id_token = response['AuthenticationResult']['IdToken']
-
-    # # Retrieve identity pool credentials
-    # logins = 'cognito-idp.' + COGNITO_REGION + '.amazonaws.com/' + COGNITO_USER_POOL_ID
-    # identityId = identityClient.get_id(
-    #     IdentityPoolId=COGNITO_IDENTITY_POOL_ID,
-    #     Logins={
-    #         logins: id_token
-    #     }
-    # )['IdentityId']
-
-    # aws_cred = identityClient.get_credentials_for_identity(
-    #     IdentityId=identityId,
-    #     Logins={
-    #         logins: id_token
-    #     }
-    # )['Credentials']
 
     # retrieve user data
     user_data = userClient.get_user(AccessToken=access_token)
@@ -234,8 +210,8 @@ def signup():
                   "description": description
               }, 401)
 
-    return response
-
+    return response;
+    
 
 # Confirm signup route
 @bp.route('/confirm', methods=['POST'])
@@ -252,6 +228,7 @@ def confirm():
       Username=data['email'],
       ConfirmationCode=data['confirm_code'],
     )
+
     return response
 
 # Resend signup confirmation code route
@@ -369,7 +346,7 @@ def token():
     code = request.get_json()['code']
     client_id = COGNITO_CLIENT_ID
     client_secret = COGNITO_CLIENT_SECRET
-    callback_uri = 'http://localhost:4040/login'
+    callback_uri = 'http://localhost:4040/signin'
     cognito_app_url = 'https://homeuudemo.auth.us-east-1.amazoncognito.com'
 
     token_url = f"{cognito_app_url}/oauth2/token"
@@ -385,20 +362,11 @@ def token():
     response = requests.post(token_url, auth=auth, data=params)
 
     refresh_token = response.json().get('refresh_token')
-
-    response = userClient.initiate_auth(
-      ClientId=COGNITO_CLIENT_ID,
-      AuthFlow='REFRESH_TOKEN_AUTH',
-      AuthParameters={
-        'REFRESH_TOKEN': refresh_token,
-        'SECRET_HASH': COGNITO_CLIENT_SECRET
-      }
-    )
-
-    access_token = response['AuthenticationResult']['AccessToken']
+    access_token = response.json().get('access_token')
 
     # retrieve user data
     user_data = userClient.get_user(AccessToken=access_token)
+    print(user_data)
 
     # create user object from user data
     user = get_user_attr(user_data)
@@ -425,3 +393,13 @@ def forgot_password():
       Username=data['username']
     )
     return response
+
+@bp.route('/users', methods=['GET'])
+def users():
+    users = userClient.list_users(
+        UserPoolId=COGNITO_USER_POOL_ID,
+        AttributesToGet=['email'],
+        Filter='email = "erikguntner@gmail.com"'
+    )
+
+    return users;
